@@ -27,7 +27,8 @@ app.add_middleware(
     "http://localhost:51264",
     "http://127.0.0.1:5500",
     "http://localhost:5500",
-    "http://192.168.1.17:5500"
+    "http://192.168.1.17:5500",
+    "https://staging.d3v1t5u20qbnoh.amplifyapp.com"
 ],
     allow_credentials=True,
     allow_methods=["*"],
