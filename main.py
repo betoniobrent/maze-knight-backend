@@ -23,14 +23,8 @@ security = HTTPBearer()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-    "http://127.0.0.1:51264",
-    "http://localhost:51264",
-    "http://127.0.0.1:5500",
-    "http://localhost:5500",
-    "http://192.168.1.17:5500",
-    "https://staging.d3v1t5u20qbnoh.amplifyapp.com"
-    "https://staging.ds1jtwr1n07u3.amplifyapp.com"
-],
+        "*"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
