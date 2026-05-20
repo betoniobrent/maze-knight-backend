@@ -36,6 +36,31 @@ app.add_middleware(
 
 Base.metadata.create_all(bind=engine)
 
+def create_default_admin():
+    db = SessionLocal()
+
+    try:
+        admin_user = db.query(User).filter(
+            User.username == "admin"
+        ).first()
+
+        if not admin_user:
+            new_admin = User(
+                username="admin",
+                password_hash=hash_password("admin123"),
+                is_admin=1,
+                is_banned=0
+            )
+
+            db.add(new_admin)
+            db.commit()
+
+    finally:
+        db.close()
+
+
+create_default_admin()
+
 
 def get_db():
     db = SessionLocal()
