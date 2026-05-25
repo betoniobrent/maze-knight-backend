@@ -5,10 +5,12 @@ from jose import jwt
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 import json
+import os
+import shutil
 
 from database import SessionLocal, engine
 from models import Base, User, Score, ActivityLog
-from schemas import RegisterSchema, LoginSchema, ScoreSchema, AdminUserSchema
+from schemas import RegisterSchema, LoginSchema, AdminUserSchema
 from auth import hash_password, verify_password
 
 
@@ -22,15 +24,14 @@ security = HTTPBearer()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "*"
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 Base.metadata.create_all(bind=engine)
+
 
 def create_default_admin():
     db = SessionLocal()
@@ -60,6 +61,7 @@ create_default_admin()
 
 def get_db():
     db = SessionLocal()
+
     try:
         yield db
     finally:
@@ -90,7 +92,11 @@ def verify_admin_token(
     token = credentials.credentials
 
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(
+            token,
+            SECRET_KEY,
+            algorithms=[ALGORITHM]
+        )
 
         if payload.get("is_admin") != 1:
             raise HTTPException(
@@ -161,6 +167,7 @@ def register(
         "message": "Registration successful"
     }
 
+
 @app.post("/api/v1/auth/login")
 def login(
     data: LoginSchema,
@@ -206,6 +213,8 @@ def login(
         "access_token": token,
         "token_type": "bearer"
     }
+
+
 @app.post("/api/v1/scores/save")
 async def save_score(
     request: Request,
@@ -224,8 +233,46 @@ async def save_score(
     sanity_left = float(data.get("sanity_left"))
     pulses_used = int(float(data.get("pulses_used")))
 
+    if not username or username.strip() == "":
+        raise HTTPException(
+            status_code=400,
+            detail="Username is required"
+        )
+
+    if len(username) > 20:
+        raise HTTPException(
+            status_code=400,
+            detail="Username too long"
+        )
+
+    if level_id < 1 or level_id > 5:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid level"
+        )
+
+    if clear_time < 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid clear time"
+        )
+
+    if sanity_left < 0 or sanity_left > 100:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid sanity value"
+        )
+
+    if pulses_used < 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid pulse value"
+        )
+
     final_score = round(
-        clear_time + (pulses_used * 30) + ((100 - sanity_left) * 2),
+        clear_time +
+        (pulses_used * 30) +
+        ((100 - sanity_left) * 2),
         2
     )
 
@@ -242,10 +289,10 @@ async def save_score(
     db.commit()
 
     add_activity_log(
-    db,
-    f"Score saved by {username} on Level {level_id} | Score: {final_score}",
-    username
-)
+        db,
+        f"Score saved by {username} on Level {level_id} | Score: {final_score}",
+        username
+    )
 
     return {
         "message": "Score saved",
@@ -381,12 +428,6 @@ def admin_delete_user(
     }
 
 
-latest_broadcast = {
-    "title": "",
-    "message": "",
-    "created_at": ""
-}
-
 @app.put("/api/v1/admin/ban/{user_id}")
 def ban_user(
     user_id: int,
@@ -448,6 +489,14 @@ def unban_user(
         "message": "User unbanned successfully"
     }
 
+
+latest_broadcast = {
+    "title": "",
+    "message": "",
+    "created_at": ""
+}
+
+
 @app.post("/api/v1/admin/broadcast")
 def create_broadcast(
     data: dict,
@@ -485,6 +534,87 @@ def get_activity_logs(
         .all()
 
     return logs
+
+
+# =========================
+# BACKUP / RECOVERY SYSTEM
+# =========================
+
+BACKUP_DIR = "backups"
+DB_FILE = "maze_knight.db"
+
+os.makedirs(BACKUP_DIR, exist_ok=True)
+
+
+@app.post("/api/v1/admin/backup")
+def create_backup(
+    db: Session = Depends(get_db),
+    admin=Depends(verify_admin_token)
+):
+    if not os.path.exists(DB_FILE):
+        raise HTTPException(
+            status_code=404,
+            detail="Database file not found"
+        )
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_name = f"maze_knight_backup_{timestamp}.db"
+    backup_path = os.path.join(BACKUP_DIR, backup_name)
+
+    shutil.copy(DB_FILE, backup_path)
+
+    add_activity_log(
+        db,
+        f"Database backup created: {backup_name}",
+        admin.get("sub", "admin")
+    )
+
+    return {
+        "message": "Backup created successfully",
+        "backup_file": backup_name
+    }
+
+
+@app.get("/api/v1/admin/backups")
+def list_backups(
+    admin=Depends(verify_admin_token)
+):
+    return {
+        "backups": os.listdir(BACKUP_DIR)
+    }
+
+
+@app.post("/api/v1/admin/restore/{backup_file}")
+def restore_backup(
+    backup_file: str,
+    db: Session = Depends(get_db),
+    admin=Depends(verify_admin_token)
+):
+    backup_path = os.path.join(
+        BACKUP_DIR,
+        backup_file
+    )
+
+    if not os.path.exists(backup_path):
+        raise HTTPException(
+            status_code=404,
+            detail="Backup file not found"
+        )
+
+    shutil.copy(backup_path, DB_FILE)
+
+    add_activity_log(
+        db,
+        f"Database restored from: {backup_file}",
+        admin.get("sub", "admin")
+    )
+
+    return {
+        "message": "Database restored successfully",
+        "restored_file": backup_file
+    }
+
+
 online_players = {}
 
 
@@ -522,18 +652,18 @@ def get_online_players(
         "online_count": len(active_players),
         "players": active_players
     }
+
+
 @app.get("/api/v1/player/stats/{username}")
 def get_player_stats(
     username: str,
     db: Session = Depends(get_db)
 ):
-
     scores = db.query(Score).filter(
         Score.username == username
     ).all()
 
     if len(scores) == 0:
-
         return {
             "username": username,
             "total_clears": 0,
@@ -577,6 +707,8 @@ def get_player_stats(
         "total_pulses_used": total_pulses_used,
         "levels_completed": levels_completed
     }
+
+
 @app.get("/api/v1/player/achievements/{username}")
 def get_player_achievements(
     username: str,
